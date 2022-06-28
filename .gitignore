@@ -1,0 +1,9 @@
+cmake-build-*/
+.idea
+
+# Visual Studio
+.vs/
+out/
+CMakeSettings.json
+/target
+/Cargo.lock
