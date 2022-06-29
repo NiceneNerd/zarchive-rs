@@ -42,8 +42,22 @@ impl<'a> ArchiveIterator<'a> {
         }
     }
 
-    pub fn into_vec(self) -> Vec<String> {
+    pub fn into_vec(mut self) -> Vec<String> {
+        if !self.filled && self.fill().is_none() {
+            return vec![];
+        }
         self.files
+    }
+
+    fn fill(&mut self) -> Option<()> {
+        let mut dir_entry = ffi::DirEntry::default();
+        let root = self.reader.0.pin_mut().LookUp("", true, true).unwrap();
+        if root == ZARCHIVE_INVALID_NODE {
+            return None;
+        }
+        self.process_dir_entry(root, "", &mut dir_entry).ok()?;
+        self.filled = true;
+        Some(())
     }
 }
 
@@ -80,13 +94,7 @@ impl<'a> Iterator for ArchiveIterator<'a> {
     type Item = String;
     fn next(&mut self) -> Option<Self::Item> {
         if !self.filled {
-            let mut dir_entry = ffi::DirEntry::default();
-            let root = self.reader.0.pin_mut().LookUp("", true, true).unwrap();
-            if root == ZARCHIVE_INVALID_NODE {
-                return None;
-            }
-            self.process_dir_entry(root, "", &mut dir_entry).ok()?;
-            self.filled = true;
+            self.fill()?;
         }
         if self.index < self.files.len() {
             let result = self.files.swap_remove(self.index);
@@ -99,6 +107,9 @@ impl<'a> Iterator for ArchiveIterator<'a> {
 }
 
 pub struct ZArchiveReader(cxx::UniquePtr<ffi::ZArchiveReader>);
+
+unsafe impl Send for ZArchiveReader {}
+unsafe impl Sync for ZArchiveReader {}
 
 impl ZArchiveReader {
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
@@ -266,6 +277,7 @@ mod ffi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
     #[test]
     fn iter_files() {
@@ -293,6 +305,21 @@ mod tests {
             .read_from_file("content/Pack/Bootup.pack", 0, 4)
             .unwrap();
         assert_eq!(&data[..4], b"SARC");
+    }
+
+    #[test]
+    fn concurrency() {
+        use std::sync::{Arc, Mutex};
+        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        let files = archive.files().into_vec();
+        let archive = Arc::new(Mutex::new(archive));
+        files.into_par_iter().for_each(|file| {
+            if let Some(data) = archive.lock().unwrap().read_from_file(&file, 0, 4) {
+                println!("{}", std::str::from_utf8(&data[..4]).unwrap());
+            } else if !file.contains("AocMainField") {
+                panic!("Failed to get data for {}", file);
+            }
+        });
     }
 
     #[test]

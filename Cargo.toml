@@ -8,5 +8,8 @@ cxx = "1.0.69"
 thiserror = "1.0.31"
 zstd-sys = "2.0.1"
 
+[dev-dependencies]
+rayon = "1.5.3"
+
 [build-dependencies]
 cxx-build = "1.0.69"
