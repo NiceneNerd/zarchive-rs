@@ -3,10 +3,10 @@ name = "zarchive"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 cxx = "1.0.69"
+thiserror = "1.0.31"
+zstd-sys = "2.0.1+zstd.1.5.2"
 
 [build-dependencies]
 cxx-build = "1.0.69"

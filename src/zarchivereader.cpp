@@ -1,4 +1,5 @@
 #include "zarchive/zarchivereader.h"
+#include "zarchive/src/lib.rs.h"
 #include "zarchive/zarchivecommon.h"
 
 #include <fstream>
@@ -197,7 +198,8 @@ bool ZArchiveReader::GetDirEntry(ZArchiveNodeHandle nodeHandle, uint32_t index, 
 		dirEntry.size = it.GetFileSize();
 	else
 		dirEntry.size = 0;
-	dirEntry.name = GetName(m_nameTable, it.GetNameOffset());
+	const auto name = GetName(m_nameTable, it.GetNameOffset());
+	dirEntry.name = rust::Str(name.data(), name.size());
 	if (dirEntry.name.empty())
 		return false; // bad name
 	return true;
@@ -213,7 +215,7 @@ uint64_t ZArchiveReader::GetFileSize(ZArchiveNodeHandle nodeHandle)
 	return file.GetFileSize();
 }
 
-uint64_t ZArchiveReader::ReadFromFile(ZArchiveNodeHandle nodeHandle, uint64_t offset, uint64_t length, void* buffer)
+uint64_t ZArchiveReader::ReadFromFile(ZArchiveNodeHandle nodeHandle, uint64_t offset, uint64_t length, uint8_t* buffer)
 {
 	if (nodeHandle >= m_fileTree.size())
 		return 0;

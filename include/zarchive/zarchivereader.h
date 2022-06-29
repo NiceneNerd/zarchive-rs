@@ -8,25 +8,17 @@
 
 #include <filesystem>
 #include <fstream>
-
 #include "zarchivecommon.h"
 #include "rust/cxx.h";
 
 using ZArchiveNodeHandle = uint32_t;
+struct DirEntry;
 
 static inline ZArchiveNodeHandle ZARCHIVE_INVALID_NODE = 0xFFFFFFFF;
 
 class ZArchiveReader
 {
 public:
-	struct DirEntry
-	{
-		std::string_view name;
-		bool isFile;
-		bool isDirectory;
-		uint64_t size; // only valid for directories
-	};
-
 	static std::unique_ptr<ZArchiveReader> OpenFromFile(const std::filesystem::path& path);
 
 	ZArchiveReader(std::ifstream&& file, std::vector<_ZARCHIVE::CompressionOffsetRecord>&& offsetRecords, std::vector<uint8_t>&& nameTable, std::vector<_ZARCHIVE::FileDirectoryEntry>&& fileTree, uint64_t compressedDataOffset, uint64_t compressedDataSize);
@@ -42,7 +34,7 @@ public:
 
 	// file operations
 	uint64_t GetFileSize(ZArchiveNodeHandle nodeHandle);
-	uint64_t ReadFromFile(ZArchiveNodeHandle nodeHandle, uint64_t offset, uint64_t length, void* buffer);
+	uint64_t ReadFromFile(ZArchiveNodeHandle nodeHandle, uint64_t offset, uint64_t length, uint8_t* buffer);
 
 private:
 	struct CacheBlock

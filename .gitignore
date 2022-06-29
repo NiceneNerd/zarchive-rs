@@ -7,3 +7,4 @@ out/
 CMakeSettings.json
 /target
 /Cargo.lock
+/.vscode
