@@ -1,12 +1,15 @@
-use std::collections::BTreeMap;
-
 use cxx::{type_id, ExternType};
+use std::{io::Write, path::Path};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ZArchiveError {
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
+    #[error("File not in archive: {0}")]
+    MissingFile(String),
+    #[error("IO error: {0}")]
+    IOError(#[from] std::io::Error),
     #[error("{0}")]
     Other(#[from] cxx::Exception),
 }
@@ -15,7 +18,7 @@ type Result<T> = std::result::Result<T, ZArchiveError>;
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
 #[repr(transparent)]
 pub struct ZArchiveNodeHandle(u32);
-static ZARCHIVE_INVALID_NODE: ZArchiveNodeHandle = ZArchiveNodeHandle(0xFFFFFFFF);
+const ZARCHIVE_INVALID_NODE: ZArchiveNodeHandle = ZArchiveNodeHandle(0xFFFFFFFF);
 
 unsafe impl ExternType for ZArchiveNodeHandle {
     type Id = type_id!("ZArchiveNodeHandle");
@@ -38,6 +41,10 @@ impl<'a> ArchiveIterator<'a> {
             filled: false,
         }
     }
+
+    pub fn into_vec(self) -> Vec<String> {
+        self.files
+    }
 }
 
 impl<'a> ArchiveIterator<'a> {
@@ -53,7 +60,7 @@ impl<'a> ArchiveIterator<'a> {
                 let full_path = if !parent.is_empty() {
                     [parent, dir_entry.name].join("/")
                 } else {
-                    dir_entry.name.to_string()
+                    dir_entry.name.to_owned()
                 };
                 if dir_entry.isFile {
                     self.files.push(full_path);
@@ -94,7 +101,7 @@ impl<'a> Iterator for ArchiveIterator<'a> {
 pub struct ZArchiveReader(cxx::UniquePtr<ffi::ZArchiveReader>);
 
 impl ZArchiveReader {
-    pub fn new(path: impl AsRef<std::path::Path>) -> Result<Self> {
+    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self(ffi::OpenFromFile(
             path.as_ref().to_str().ok_or_else(|| {
                 ZArchiveError::InvalidFilePath(path.as_ref().to_string_lossy().to_string())
@@ -102,11 +109,11 @@ impl ZArchiveReader {
         )?))
     }
 
-    pub fn read_file(&mut self, path: impl AsRef<std::path::Path>) -> Option<Vec<u8>> {
+    pub fn read_file(&mut self, file: impl AsRef<Path>) -> Option<Vec<u8>> {
         let handle = self
             .0
             .pin_mut()
-            .LookUp(path.as_ref().to_str()?, true, false)
+            .LookUp(file.as_ref().to_str()?, true, false)
             .ok()?;
         if handle == ZARCHIVE_INVALID_NODE {
             None
@@ -120,7 +127,84 @@ impl ZArchiveReader {
                     .ReadFromFile(handle, 0, size, buffer.as_mut_ptr())
                     .unwrap();
                 if written != size {
-                    return None;
+                    panic!(
+                        "Wrote an unexpected number of bytes, expected {} but got {}",
+                        size, written
+                    );
+                }
+                buffer.set_len(written as usize);
+            };
+            Some(buffer)
+        }
+    }
+
+    pub fn extract_file(&mut self, file: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
+        let file = file.as_ref().to_str().ok_or_else(|| {
+            ZArchiveError::InvalidFilePath(file.as_ref().to_string_lossy().to_string())
+        })?;
+        let dest = if dest.as_ref().is_dir() {
+            dest.as_ref().join(file)
+        } else {
+            dest.as_ref().to_path_buf()
+        };
+        dest.parent().map(std::fs::create_dir_all).transpose()?;
+        let handle = self.0.pin_mut().LookUp(file, true, false)?;
+        if handle == ZARCHIVE_INVALID_NODE || !self.0.IsFile(handle)? {
+            Err(ZArchiveError::MissingFile(file.to_owned()))
+        } else {
+            let size = self.0.pin_mut().GetFileSize(handle)?;
+            let mut dest_handle = std::fs::File::create(dest)?;
+            dest_handle.set_len(size as u64)?;
+            let mut buffer = vec![0; size as usize];
+            unsafe {
+                let written = self
+                    .0
+                    .pin_mut()
+                    .ReadFromFile(handle, 0, size, buffer.as_mut_ptr())
+                    .unwrap();
+                if written != size {
+                    panic!(
+                        "Wrote an unexpected number of bytes, expected {} but got {}",
+                        size, written
+                    );
+                }
+                buffer.set_len(written as usize);
+            };
+            std::io::BufWriter::new(&mut dest_handle).write_all(&buffer)?;
+            Ok(())
+        }
+    }
+
+    pub fn read_from_file(
+        &mut self,
+        file: impl AsRef<Path>,
+        offset: usize,
+        length: usize,
+    ) -> Option<Vec<u8>> {
+        let handle = self
+            .0
+            .pin_mut()
+            .LookUp(file.as_ref().to_str()?, true, false)
+            .ok()?;
+        if handle == ZARCHIVE_INVALID_NODE {
+            None
+        } else {
+            let size = self.0.pin_mut().GetFileSize(handle).ok()?;
+            if length > size as usize {
+                return None;
+            }
+            let mut buffer: Vec<u8> = Vec::with_capacity(length);
+            unsafe {
+                let written = self
+                    .0
+                    .pin_mut()
+                    .ReadFromFile(handle, offset as u64, length as u64, buffer.as_mut_ptr())
+                    .unwrap();
+                if written != length as u64 {
+                    panic!(
+                        "Wrote an unexpected number of bytes, expected {} but got {}",
+                        length, written
+                    );
                 }
                 buffer.set_len(written as usize);
             };
@@ -189,6 +273,26 @@ mod tests {
         for file in archive.files() {
             println!("{}", file);
         }
+    }
+
+    #[test]
+    fn extract_file() {
+        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        archive
+            .extract_file(
+                "content/Actor/ActorInfo.product.sbyml",
+                "test/ActorInfo.product.sbyml",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn partial_read() {
+        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        let data = archive
+            .read_from_file("content/Pack/Bootup.pack", 0, 4)
+            .unwrap();
+        assert_eq!(&data[..4], b"SARC");
     }
 
     #[test]
