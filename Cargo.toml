@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 cxx = "1.0.69"
 thiserror = "1.0.31"
-zstd-sys = "2.0.1+zstd.1.5.2"
+zstd-sys = "2.0.1"
 
 [build-dependencies]
 cxx-build = "1.0.69"

@@ -1,6 +1,7 @@
-use thiserror::Error;
+use std::collections::BTreeMap;
 
-static ZARCHIVE_INVALID_NODE: u32 = 0xFFFFFFFF;
+use cxx::{type_id, ExternType};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ZArchiveError {
@@ -9,81 +10,84 @@ pub enum ZArchiveError {
     #[error("{0}")]
     Other(#[from] cxx::Exception),
 }
-
 type Result<T> = std::result::Result<T, ZArchiveError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+#[repr(transparent)]
+pub struct ZArchiveNodeHandle(u32);
+static ZARCHIVE_INVALID_NODE: ZArchiveNodeHandle = ZArchiveNodeHandle(0xFFFFFFFF);
+
+unsafe impl ExternType for ZArchiveNodeHandle {
+    type Id = type_id!("ZArchiveNodeHandle");
+    type Kind = cxx::kind::Trivial;
+}
 
 pub struct ArchiveIterator<'a> {
     reader: &'a mut ZArchiveReader,
-    todo: Vec<(String, &'a str, u32, u32)>,
-    index: u32,
-    started: bool,
-    dir_entry: ffi::DirEntry<'a>,
+    files: Vec<String>,
+    index: usize,
+    filled: bool,
 }
 
 impl<'a> ArchiveIterator<'a> {
     pub fn new(reader: &'a mut ZArchiveReader) -> Self {
         Self {
             reader,
-            todo: Vec::new(),
+            files: Vec::new(),
             index: 0,
-            started: false,
-            dir_entry: Default::default(),
+            filled: false,
         }
+    }
+}
+
+impl<'a> ArchiveIterator<'a> {
+    fn process_dir_entry(
+        &mut self,
+        node_handle: ZArchiveNodeHandle,
+        parent: &str,
+        dir_entry: &mut ffi::DirEntry,
+    ) -> Result<()> {
+        let count = self.reader.0.GetDirEntryCount(node_handle)?;
+        for i in 0..count {
+            if self.reader.0.GetDirEntry(node_handle, i, dir_entry)? {
+                let full_path = if !parent.is_empty() {
+                    [parent, dir_entry.name].join("/")
+                } else {
+                    dir_entry.name.to_string()
+                };
+                if dir_entry.isFile {
+                    self.files.push(full_path);
+                } else if dir_entry.isDirectory {
+                    let next = self.reader.0.pin_mut().LookUp(&full_path, false, true)?;
+                    if next != ZARCHIVE_INVALID_NODE {
+                        self.process_dir_entry(next, &full_path, dir_entry)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
 impl<'a> Iterator for ArchiveIterator<'a> {
     type Item = String;
     fn next(&mut self) -> Option<Self::Item> {
-        if !self.started {
-            let root = self.reader.0.pin_mut().LookUp("", false, true).ok()?;
+        if !self.filled {
+            let mut dir_entry = ffi::DirEntry::default();
+            let root = self.reader.0.pin_mut().LookUp("", true, true).unwrap();
             if root == ZARCHIVE_INVALID_NODE {
                 return None;
             }
-            self.todo.push(("".to_owned(), "", root, 0));
-            self.started = true;
+            self.process_dir_entry(root, "", &mut dir_entry).ok()?;
+            self.filled = true;
         }
-        self.todo.pop().and_then(|(parent, name, handle, index)| {
-            println!("Looking at {}, index {}", parent, index);
-            if self.reader.0.IsFile(handle).ok()? {
-                if parent.is_empty() {
-                    Some(name.to_owned())
-                } else {
-                    Some([&parent, name].join("/"))
-                }
-            } else if self.reader.0.IsDirectory(handle).ok()? {
-                let path = if !parent.is_empty() {
-                    [&parent, name].join("/")
-                } else {
-                    name.to_owned()
-                };
-                println!("Checking {}", path);
-                let next_handle = self.reader.0.pin_mut().LookUp(&path, false, true).ok()?;
-                let count = self.reader.0.GetDirEntryCount(next_handle).ok()?;
-                for i in 0..count {
-                    if self
-                        .reader
-                        .0
-                        .GetDirEntry(next_handle, i, &mut self.dir_entry)
-                        .ok()?
-                    {
-                        let sub_path = if !path.is_empty() {
-                            [&path, self.dir_entry.name].join("/")
-                        } else {
-                            self.dir_entry.name.to_owned()
-                        };
-                        let sub_handle =
-                            self.reader.0.pin_mut().LookUp(&sub_path, true, true).ok()?;
-                        println!("Adding {}", sub_path);
-                        self.todo
-                            .push((path.clone(), self.dir_entry.name, sub_handle, i));
-                    }
-                }
-                self.next()
-            } else {
-                None
-            }
-        })
+        if self.index < self.files.len() {
+            let result = self.files.swap_remove(self.index);
+            self.index += 1;
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 
@@ -143,6 +147,7 @@ mod ffi {
     unsafe extern "C++" {
         include!("zarchive/include/zarchive/zarchivereader.h");
 
+        type ZArchiveNodeHandle = crate::ZArchiveNodeHandle;
         type ZArchiveReader;
         fn OpenFromFile(path: &str) -> Result<UniquePtr<ZArchiveReader>>;
         fn LookUp(
@@ -150,20 +155,23 @@ mod ffi {
             path: &str,
             allowFile: bool,
             allowDirectory: bool,
-        ) -> Result<u32>;
-        fn IsDirectory(&self, nodeHandle: u32) -> Result<bool>;
-        fn IsFile(&self, nodeHandle: u32) -> Result<bool>;
-        fn GetDirEntryCount(&self, nodeHandle: u32) -> Result<u32>;
+        ) -> Result<ZArchiveNodeHandle>;
+        fn IsDirectory(self: &ZArchiveReader, nodeHandle: ZArchiveNodeHandle) -> Result<bool>;
+        fn IsFile(self: &ZArchiveReader, nodeHandle: ZArchiveNodeHandle) -> Result<bool>;
+        fn GetDirEntryCount(self: &ZArchiveReader, nodeHandle: ZArchiveNodeHandle) -> Result<u32>;
         fn GetDirEntry<'a>(
-            &'a self,
-            nodeHandle: u32,
+            self: &'a ZArchiveReader,
+            nodeHandle: ZArchiveNodeHandle,
             index: u32,
             dirEntry: &'a mut DirEntry,
         ) -> Result<bool>;
-        fn GetFileSize(self: Pin<&mut ZArchiveReader>, nodeHandle: u32) -> Result<u64>;
+        fn GetFileSize(
+            self: Pin<&mut ZArchiveReader>,
+            nodeHandle: ZArchiveNodeHandle,
+        ) -> Result<u64>;
         unsafe fn ReadFromFile(
             self: Pin<&mut ZArchiveReader>,
-            nodeHandle: u32,
+            nodeHandle: ZArchiveNodeHandle,
             offset: u64,
             size: u64,
             buffer: *mut u8,
@@ -217,7 +225,7 @@ mod tests {
         assert_ne!(root, ZARCHIVE_INVALID_NODE);
 
         fn print_dir_entry(
-            node_handle: u32,
+            node_handle: ZArchiveNodeHandle,
             parent: &str,
             archive: &mut cxx::UniquePtr<ffi::ZArchiveReader>,
             dir_entry: &mut ffi::DirEntry,
