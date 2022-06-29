@@ -1,11 +1,14 @@
 use cxx::{type_id, ExternType};
-use std::{io::Write, path::Path};
+use smallvec::SmallVec;
+use std::{cell::RefCell, io::Write, path::Path};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ZArchiveError {
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
+    #[error("Archive entry is not a directory: {0}")]
+    NotADirectory(String),
     #[error("File not in archive: {0}")]
     MissingFile(String),
     #[error("IO error: {0}")]
@@ -25,115 +28,150 @@ unsafe impl ExternType for ZArchiveNodeHandle {
     type Kind = cxx::kind::Trivial;
 }
 
-pub struct ArchiveIterator<'a> {
-    reader: &'a mut ZArchiveReader,
-    files: Vec<String>,
-    index: usize,
-    filled: bool,
+#[derive(Debug, Clone)]
+pub struct DirEntry<'a> {
+    inner: ffi::DirEntry<'a>,
+    parent: SmallVec<[&'a str; 5]>,
 }
 
-impl<'a> ArchiveIterator<'a> {
-    pub fn new(reader: &'a mut ZArchiveReader) -> Self {
-        Self {
-            reader,
-            files: Vec::new(),
+impl<'a> DirEntry<'a> {
+    pub fn name(&self) -> &str {
+        self.inner.name
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.inner.isFile
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.inner.isDirectory
+    }
+
+    pub fn size(&self) -> Option<usize> {
+        self.inner.isFile.then(|| self.inner.size as usize)
+    }
+
+    pub fn full_path(&self) -> String {
+        if self.parent.is_empty() {
+            self.name().to_owned()
+        } else {
+            self.parent
+                .iter()
+                .chain([self.name()].iter())
+                .map(|s| &**s)
+                .collect::<Vec<&str>>()
+                .join("/")
+        }
+    }
+
+    pub fn iter<'b>(&'a self, archive: &'b ZArchiveReader) -> Option<ArchiveDirIterator<'a>>
+    where
+        'b: 'a,
+    {
+        archive.iter_dir(self).ok()
+    }
+
+    pub fn count(&self, archive: &ZArchiveReader) -> Option<usize> {
+        self.inner
+            .isDirectory
+            .then(|| archive.count_dir_entries(self).ok())
+            .flatten()
+    }
+}
+
+#[derive(Debug)]
+pub struct ArchiveDirIterator<'a> {
+    index: u32,
+    count: u32,
+    handle: ZArchiveNodeHandle,
+    parent: SmallVec<[&'a str; 5]>,
+    reader: &'a ZArchiveReader,
+    entry: ffi::DirEntry<'a>,
+    started: bool,
+}
+
+impl<'a> ArchiveDirIterator<'a> {
+    pub fn new(
+        handle: ZArchiveNodeHandle,
+        parent: SmallVec<[&'a str; 5]>,
+        reader: &'a ZArchiveReader,
+    ) -> ArchiveDirIterator<'a> {
+        ArchiveDirIterator {
             index: 0,
-            filled: false,
+            count: 0,
+            handle,
+            parent,
+            reader,
+            entry: Default::default(),
+            started: false,
         }
     }
+}
 
-    pub fn into_vec(mut self) -> Vec<String> {
-        if !self.filled && self.fill().is_none() {
-            return vec![];
+impl<'a> Iterator for ArchiveDirIterator<'a> {
+    type Item = DirEntry<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.started {
+            self.count = self.reader.0.borrow().GetDirEntryCount(self.handle).ok()?;
         }
-        self.files
-    }
-
-    fn fill(&mut self) -> Option<()> {
-        let mut dir_entry = ffi::DirEntry::default();
-        let root = self.reader.0.pin_mut().LookUp("", true, true).unwrap();
-        if root == ZARCHIVE_INVALID_NODE {
+        if self.index >= self.count {
             return None;
         }
-        self.process_dir_entry(root, "", &mut dir_entry).ok()?;
-        self.filled = true;
-        Some(())
-    }
-}
-
-impl<'a> ArchiveIterator<'a> {
-    fn process_dir_entry(
-        &mut self,
-        node_handle: ZArchiveNodeHandle,
-        parent: &str,
-        dir_entry: &mut ffi::DirEntry,
-    ) -> Result<()> {
-        let count = self.reader.0.GetDirEntryCount(node_handle)?;
-        for i in 0..count {
-            if self.reader.0.GetDirEntry(node_handle, i, dir_entry)? {
-                let full_path = if !parent.is_empty() {
-                    [parent, dir_entry.name].join("/")
-                } else {
-                    dir_entry.name.to_owned()
-                };
-                if dir_entry.isFile {
-                    self.files.push(full_path);
-                } else if dir_entry.isDirectory {
-                    let next = self.reader.0.pin_mut().LookUp(&full_path, false, true)?;
-                    if next != ZARCHIVE_INVALID_NODE {
-                        self.process_dir_entry(next, &full_path, dir_entry)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<'a> Iterator for ArchiveIterator<'a> {
-    type Item = String;
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.filled {
-            self.fill()?;
-        }
-        if self.index < self.files.len() {
-            let result = self.files.swap_remove(self.index);
+        if self
+            .reader
+            .0
+            .borrow()
+            .GetDirEntry(self.handle, self.index, &mut self.entry)
+            .ok()?
+        {
             self.index += 1;
-            Some(result)
+            Some(DirEntry {
+                inner: self.entry.clone(),
+                parent: self.parent.clone(),
+            })
         } else {
             None
         }
     }
 }
 
-pub struct ZArchiveReader(cxx::UniquePtr<ffi::ZArchiveReader>);
+pub struct ZArchiveReader(std::cell::RefCell<cxx::UniquePtr<ffi::ZArchiveReader>>);
+
+impl std::fmt::Debug for ZArchiveReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ZArchiveReader")
+    }
+}
 
 unsafe impl Send for ZArchiveReader {}
 unsafe impl Sync for ZArchiveReader {}
 
 impl ZArchiveReader {
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self(ffi::OpenFromFile(
+        Ok(Self(RefCell::new(ffi::OpenFromFile(
             path.as_ref().to_str().ok_or_else(|| {
                 ZArchiveError::InvalidFilePath(path.as_ref().to_string_lossy().to_string())
             })?,
-        )?))
+        )?)))
     }
 
-    pub fn read_file(&mut self, file: impl AsRef<Path>) -> Option<Vec<u8>> {
+    pub fn read_file(&self, file: impl AsRef<Path>) -> Option<Vec<u8>> {
         let handle = self
             .0
+            .borrow_mut()
             .pin_mut()
             .LookUp(file.as_ref().to_str()?, true, false)
             .ok()?;
         if handle == ZARCHIVE_INVALID_NODE {
             None
         } else {
-            let size = self.0.pin_mut().GetFileSize(handle).ok()?;
+            let size = self.0.borrow_mut().pin_mut().GetFileSize(handle).ok()?;
             let mut buffer: Vec<u8> = Vec::with_capacity(size as usize);
             unsafe {
                 let written = self
                     .0
+                    .borrow_mut()
                     .pin_mut()
                     .ReadFromFile(handle, 0, size, buffer.as_mut_ptr())
                     .unwrap();
@@ -149,7 +187,7 @@ impl ZArchiveReader {
         }
     }
 
-    pub fn extract_file(&mut self, file: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
+    pub fn extract_file(&self, file: impl AsRef<Path>, dest: impl AsRef<Path>) -> Result<()> {
         let file = file.as_ref().to_str().ok_or_else(|| {
             ZArchiveError::InvalidFilePath(file.as_ref().to_string_lossy().to_string())
         })?;
@@ -159,17 +197,18 @@ impl ZArchiveReader {
             dest.as_ref().to_path_buf()
         };
         dest.parent().map(std::fs::create_dir_all).transpose()?;
-        let handle = self.0.pin_mut().LookUp(file, true, false)?;
-        if handle == ZARCHIVE_INVALID_NODE || !self.0.IsFile(handle)? {
+        let handle = self.0.borrow_mut().pin_mut().LookUp(file, true, false)?;
+        if handle == ZARCHIVE_INVALID_NODE || !self.0.borrow().IsFile(handle)? {
             Err(ZArchiveError::MissingFile(file.to_owned()))
         } else {
-            let size = self.0.pin_mut().GetFileSize(handle)?;
+            let size = self.0.borrow_mut().pin_mut().GetFileSize(handle)?;
             let mut dest_handle = std::fs::File::create(dest)?;
             dest_handle.set_len(size as u64)?;
             let mut buffer = vec![0; size as usize];
             unsafe {
                 let written = self
                     .0
+                    .borrow_mut()
                     .pin_mut()
                     .ReadFromFile(handle, 0, size, buffer.as_mut_ptr())
                     .unwrap();
@@ -187,20 +226,21 @@ impl ZArchiveReader {
     }
 
     pub fn read_from_file(
-        &mut self,
+        &self,
         file: impl AsRef<Path>,
         offset: usize,
         length: usize,
     ) -> Option<Vec<u8>> {
         let handle = self
             .0
+            .borrow_mut()
             .pin_mut()
             .LookUp(file.as_ref().to_str()?, true, false)
             .ok()?;
         if handle == ZARCHIVE_INVALID_NODE {
             None
         } else {
-            let size = self.0.pin_mut().GetFileSize(handle).ok()?;
+            let size = self.0.borrow_mut().pin_mut().GetFileSize(handle).ok()?;
             if length > size as usize {
                 return None;
             }
@@ -208,6 +248,7 @@ impl ZArchiveReader {
             unsafe {
                 let written = self
                     .0
+                    .borrow_mut()
                     .pin_mut()
                     .ReadFromFile(handle, offset as u64, length as u64, buffer.as_mut_ptr())
                     .unwrap();
@@ -223,8 +264,100 @@ impl ZArchiveReader {
         }
     }
 
-    pub fn files(&mut self) -> ArchiveIterator<'_> {
-        ArchiveIterator::new(self)
+    pub fn get_files(&self) -> Result<Vec<String>> {
+        fn process_dir_entry(
+            archive: &ZArchiveReader,
+            files: &mut Vec<String>,
+            node_handle: ZArchiveNodeHandle,
+            parent: &str,
+            dir_entry: &mut ffi::DirEntry,
+        ) -> Result<()> {
+            let count = archive.0.borrow().GetDirEntryCount(node_handle)?;
+            for i in 0..count {
+                if archive.0.borrow().GetDirEntry(node_handle, i, dir_entry)? {
+                    let full_path = if !parent.is_empty() {
+                        [parent, dir_entry.name].join("/")
+                    } else {
+                        dir_entry.name.to_owned()
+                    };
+                    if dir_entry.isFile {
+                        files.push(full_path);
+                    } else if dir_entry.isDirectory {
+                        let next = archive
+                            .0
+                            .borrow_mut()
+                            .pin_mut()
+                            .LookUp(&full_path, false, true)?;
+                        if next != ZARCHIVE_INVALID_NODE {
+                            process_dir_entry(archive, files, next, &full_path, dir_entry)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let mut dir_entry = ffi::DirEntry::default();
+        let mut files = vec![];
+        let root = self.0.borrow_mut().pin_mut().LookUp("", false, true)?;
+        if root != ZARCHIVE_INVALID_NODE {
+            process_dir_entry(self, &mut files, root, "", &mut dir_entry)?;
+        }
+        Ok(files)
+    }
+
+    pub fn iter(&self) -> Result<ArchiveDirIterator<'_>> {
+        let root = self.0.borrow_mut().pin_mut().LookUp("", false, true)?;
+        if root == ZARCHIVE_INVALID_NODE {
+            Err(ZArchiveError::MissingFile("archive root".to_owned()))
+        } else {
+            Ok(ArchiveDirIterator::new(root, smallvec::smallvec![], self))
+        }
+    }
+
+    pub fn iter_dir<'a, 'b>(&'a self, dir: &'b DirEntry<'a>) -> Result<ArchiveDirIterator<'b>>
+    where
+        'a: 'b,
+    {
+        let node_handle = self
+            .0
+            .borrow_mut()
+            .pin_mut()
+            .LookUp(&dir.full_path(), false, true)?;
+        if node_handle == ZARCHIVE_INVALID_NODE {
+            Err(ZArchiveError::MissingFile(dir.full_path()))
+        } else if !dir.is_dir() {
+            Err(ZArchiveError::NotADirectory(dir.full_path()))
+        } else {
+            Ok(ArchiveDirIterator::new(
+                node_handle,
+                dir.parent
+                    .iter()
+                    .copied()
+                    .chain([dir.name()].into_iter())
+                    .collect(),
+                self,
+            ))
+        }
+    }
+
+    pub fn count_dir_entries<'a>(&'a self, dir: &'a DirEntry) -> Result<usize> {
+        let node_handle = self
+            .0
+            .borrow_mut()
+            .pin_mut()
+            .LookUp(&dir.full_path(), false, true)?;
+        if node_handle == ZARCHIVE_INVALID_NODE {
+            Err(ZArchiveError::MissingFile(dir.full_path()))
+        } else if !dir.is_dir() {
+            Err(ZArchiveError::NotADirectory(dir.full_path()))
+        } else {
+            Ok(self
+                .0
+                .borrow_mut()
+                .pin_mut()
+                .GetDirEntryCount(node_handle)? as usize)
+        }
     }
 }
 
@@ -280,16 +413,41 @@ mod tests {
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
     #[test]
-    fn iter_files() {
-        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
-        for file in archive.files() {
+    fn file_list() {
+        let archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        for file in archive.get_files().unwrap() {
             println!("{}", file);
         }
     }
 
     #[test]
+    fn walk_tree() {
+        let archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        fn print_dir<'a, 'b>(archive: &'a ZArchiveReader, dir: &'b DirEntry<'a>)
+        where
+            'a: 'b,
+        {
+            for entry in archive.iter_dir(dir).unwrap() {
+                if entry.is_file() {
+                    println!("{}", entry.full_path());
+                } else {
+                    print_dir(&archive, &entry);
+                }
+            }
+        }
+
+        for entry in archive.iter().unwrap() {
+            if entry.is_file() {
+                println!("{}", entry.full_path());
+            } else {
+                print_dir(&archive, &entry);
+            }
+        }
+    }
+
+    #[test]
     fn extract_file() {
-        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        let archive = ZArchiveReader::new("test/crafting.zar").unwrap();
         archive
             .extract_file(
                 "content/Actor/ActorInfo.product.sbyml",
@@ -300,7 +458,7 @@ mod tests {
 
     #[test]
     fn partial_read() {
-        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        let archive = ZArchiveReader::new("test/crafting.zar").unwrap();
         let data = archive
             .read_from_file("content/Pack/Bootup.pack", 0, 4)
             .unwrap();
@@ -310,8 +468,8 @@ mod tests {
     #[test]
     fn concurrency() {
         use std::sync::{Arc, Mutex};
-        let mut archive = ZArchiveReader::new("test/crafting.zar").unwrap();
-        let files = archive.files().into_vec();
+        let archive = ZArchiveReader::new("test/crafting.zar").unwrap();
+        let files = archive.get_files().unwrap();
         let archive = Arc::new(Mutex::new(archive));
         files.into_par_iter().for_each(|file| {
             if let Some(data) = archive.lock().unwrap().read_from_file(&file, 0, 4) {
