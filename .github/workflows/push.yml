@@ -21,6 +21,8 @@ jobs:
       with:
         toolchain: nightly
         profile: default
+    - name: Install zstd
+      run: sudo apt install libzstd-dev
     - name: Run tests
       run: cargo test
   build_windows:
