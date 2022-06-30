@@ -4,7 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/zarchivereader.cpp");
     println!("cargo:rerun-if-changed=include/zarchive/zarchivereader.h");
     println!("cargo:rustc-link-lib=static=zstd");
-    cxx_build::bridge("src/lib.rs")
+    cxx_build::bridge("src/reader.rs")
         .include("include")
         .flag("-w")
         .flag_if_supported("-std=c++17")

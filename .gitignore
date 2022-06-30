@@ -8,3 +8,4 @@ CMakeSettings.json
 /target
 /Cargo.lock
 /.vscode
+/test/crafting
