@@ -27,7 +27,7 @@ The Rust bindings add some slight overhead to the reader's directory iteration A
 but hopefully with a sufficient benefit of convenience.
 
 ## Example - Pack and extract an archive
-```ignore
+```rust
 use zarchive::{pack, extract};
 pack("/path/to/stuff/to/pack", "/path/to/archive.zar")?;
 extract("/path/to/archive.zar", "/path/to/extract")?;
