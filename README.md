@@ -35,7 +35,7 @@ extract("/path/to/archive.zar", "/path/to/extract")?;
 
 ## Limitations
 - Not designed for adding, removing or modifying files after the archive has been created
-- 
+ 
 ## No-seek creation
 When creating new archives only byte append operations are used. No file seeking is
 necessary. This makes it possible to create archives on storage which is write-once.
