@@ -1,7 +1,8 @@
 #include "zarchive/zarchivewriter.h"
 #include "zarchive/zarchivecommon.h"
-#include "rust/cxx.h"
 
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <queue>
@@ -11,6 +12,8 @@
 #include "sha_256.h"
 
 #include <cassert>
+
+namespace fs = std::filesystem;
 
 ZArchiveWriter::ZArchiveWriter(CB_NewOutputFile cbNewOutputFile, CB_WriteOutputData cbWriteOutputData, void* ctx) : m_cbCtx(ctx), m_cbNewOutputFile(cbNewOutputFile), m_cbWriteOutputData(cbWriteOutputData)
 {
@@ -352,7 +355,7 @@ void ZArchiveWriter::WriteFooter()
 
 struct PackContext
 {
-	std::filesystem::path outputFilePath;
+	fs::path outputFilePath;
 	std::ofstream currentOutputFile;
 	bool hasError{false};
 };
@@ -363,8 +366,9 @@ void _pack_NewOutputFile(const int32_t partIndex, void* ctx)
 	packContext->currentOutputFile = std::ofstream(packContext->outputFilePath, std::ios::binary);
 	if (!packContext->currentOutputFile.is_open())
 	{
-		printf("Failed to create output file: %s\n", packContext->outputFilePath.string().c_str());
-		packContext->hasError = true;
+		// printf("Failed to create output file: %s\n", packContext->outputFilePath.string().c_str());
+		// packContext->hasError = true;
+		throw "Failed to create output file: " + packContext->outputFilePath.string();
 	}
 }
 
@@ -374,10 +378,10 @@ void _pack_WriteOutputData(const void* data, size_t length, void* ctx)
 	packContext->currentOutputFile.write((const char*)data, length);
 }
 
-void Pack(rust::Str inputDirectory, rust::Str outputFile)
+void Pack(rust::Str inputPath, rust::Str outputPath)
 {
-	const auto inputDirectory = std::filesystem::path(std::string_view(inputDirectory.data(), inputDirectory.size()));
-	const auto outputFile = std::filesystem::path(std::string_view(outputFile.data(), outputFile.size()));
+	const auto inputDirectory = fs::path(std::string_view(inputPath.data(), inputPath.size()));
+	const auto outputFile = fs::path(std::string_view(outputPath.data(), outputPath.size()));
 	std::vector<uint8_t> buffer;
 	buffer.resize(64 * 1024);
 
@@ -385,8 +389,8 @@ void Pack(rust::Str inputDirectory, rust::Str outputFile)
 	PackContext packContext;
 	packContext.outputFilePath = outputFile;
 	ZArchiveWriter zWriter(_pack_NewOutputFile, _pack_WriteOutputData, &packContext);
-	if (packContext.hasError)
-		return -16;
+	// if (packContext.hasError)
+	// 	return -16;
 	for (auto const& dirEntry : fs::recursive_directory_iterator(inputDirectory))
 	{
 		fs::path pathEntry = fs::relative(dirEntry.path(), inputDirectory, ec);
@@ -394,23 +398,26 @@ void Pack(rust::Str inputDirectory, rust::Str outputFile)
 		{
 			if (!zWriter.MakeDir(pathEntry.generic_string().c_str(), false))
 			{
-				printf("Failed to create directory %s\n", pathEntry.string().c_str());
-				return -13;
+				// printf("Failed to create directory %s\n", pathEntry.string().c_str());
+				// return -13;
+				throw "Failed to create directory " + pathEntry.string();
 			}
 		}
 		else if (dirEntry.is_regular_file())
 		{
-			printf("Adding %s\n", pathEntry.string().c_str());
+			// printf("Adding %s\n", pathEntry.string().c_str());
 			if (!zWriter.StartNewFile(pathEntry.generic_string().c_str()))
 			{
-				printf("Failed to create archive file %s\n", pathEntry.string().c_str());
-				return -14;
+				// printf("Failed to create archive file %s\n", pathEntry.string().c_str());
+				// return -14;
+				throw "Failed to create archive file " + pathEntry.string();
 			}
 			std::ifstream inputFile(inputDirectory / pathEntry, std::ios::binary);
 			if (!inputFile.is_open())
 			{
-				printf("Failed to open input file %s\n", pathEntry.string().c_str());
-				return -15;
+				// printf("Failed to open input file %s\n", pathEntry.string().c_str());
+				// return -15;
+				throw "Failed to open input file " + pathEntry.string();
 			}
 			while( true )
 			{
@@ -421,9 +428,9 @@ void Pack(rust::Str inputDirectory, rust::Str outputFile)
 				zWriter.AppendData(buffer.data(), readBytes);
 			}
 		}
-		if (packContext.hasError)
-			return -16;
+		// if (packContext.hasError)
+		// 	return -16;
 	}
 	zWriter.Finalize();
-	return 0;
+	return;
 }

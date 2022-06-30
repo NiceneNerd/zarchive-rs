@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "zarchivecommon.h"
+#include "rust/cxx.h";
 
 class ZArchiveWriter
 {
@@ -80,3 +81,5 @@ private:
 	struct Sha_256* m_mainShaCtx{};
 	uint8_t m_integritySha[32];
 };
+
+void Pack(rust::Str inputPath, rust::Str outputPath);
