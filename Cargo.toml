@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 cxx = "1.0.69"
-rayon = { versopm = "1.5.3", optional = true }
+rayon = { version = "1.5.3", optional = true }
 smallvec = "1.8.1"
 thiserror = "1.0.31"
 zstd-sys = "2.0.1"
