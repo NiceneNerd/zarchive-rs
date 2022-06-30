@@ -1,3 +1,16 @@
+//! Handles reading and extracting from a ZArchive file.
+//!
+//! Basic usage is as follows:
+//! ```rust
+//! use zarchive::reader::ZArchiveReader;
+//!
+//! let reader = ZArchiveReader::new("test/crafting.zar").expect("Failed to read archive");
+//! let file_data = reader.read_file("content/Model/Item_Feather.sbfres").expect("File not found");
+//! assert_eq!(file_data.len(), 66416);
+//! for entry in reader.iter().unwrap() {
+//!    println!("{}", entry.name());
+//! }
+//! ```
 use crate::{Result, ZArchiveError};
 use cxx::{type_id, ExternType};
 use smallvec::{smallvec, SmallVec};
@@ -132,9 +145,10 @@ impl<'a> Iterator for ArchiveDirIterator<'a> {
     }
 }
 
-/// Represents an open ZArchive, wrapping the C++ type. It holds an open file handle
-/// to the archive on disk, which it retains until destroyed.
-/// The archive is read-only, but the C++ struct mutates constantly for many
+/// Represents an open ZArchive, wrapping the C++ type.  
+///
+/// It holds an open file handle to the archive on disk, which it retains until
+/// destroyed. The archive is read-only, but the C++ struct mutates constantly for many
 /// operations. For this reason the wrapper uses a `RefCell` for interior mutability
 /// on the Rust end. While this makes the API generally more ergonomic, it also means
 /// that concurrent access may panic without a Mutex.
