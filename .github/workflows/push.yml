@@ -36,5 +36,7 @@ jobs:
       with:
         toolchain: nightly
         profile: default
+    - name: Get zstd header
+      run: Invoke-WebRequest -Uri https://raw.githubusercontent.com/facebook/zstd/dev/lib/zstd.h -OutFile include\zstd.h
     - name: Run tests
       run: cargo test

@@ -1,6 +1,4 @@
-#include "zarchive/zarchivereader.h"
 #include "zarchive/src/reader.rs.h"
-#include "zarchive/zarchivecommon.h"
 
 #include <fstream>
 

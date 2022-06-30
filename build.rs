@@ -8,6 +8,7 @@ fn main() {
         .include("include")
         .flag("-w")
         .flag_if_supported("-std=c++17")
+        .flag_if_supported("/std:c++20")
         .file("src/zarchivereader.cpp")
         .compile("zarchive");
 }
