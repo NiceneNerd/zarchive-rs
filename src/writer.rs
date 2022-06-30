@@ -38,9 +38,12 @@ mod ffi {
 mod tests {
     #[test]
     fn pack() {
-        super::pack("test/crafting", "test/crafting2.zar").unwrap();
-        let reader = crate::ZArchiveReader::new("test/crafting.zar").unwrap();
-        let reader2 = crate::ZArchiveReader::new("test/crafting2.zar").unwrap();
-        assert_eq!(reader.get_files().unwrap(), reader2.get_files().unwrap());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let archive = crate::reader::ZArchiveReader::open("test/crafting.zar").unwrap();
+        archive.extract(temp_dir.path()).unwrap();
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        super::pack(&temp_dir, temp_file.path()).unwrap();
+        let archive2 = crate::reader::ZArchiveReader::open(temp_file.path()).unwrap();
+        assert_eq!(archive.get_files().unwrap(), archive2.get_files().unwrap());
     }
 }

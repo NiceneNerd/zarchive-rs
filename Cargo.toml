@@ -1,14 +1,24 @@
 [package]
 name = "zarchive"
+description = "Simple Rust bindings to Exzap's ZArchive library"
+authors = ["Caleb Smith <c.smith@tuta.io>"]
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+license-file = "LICENSE.md"
+repository = "https://github.com/NiceneNerd/zarchive-rs"
+keywords = ["archive", "file", "ffi", "bindings", "gamedev"]
+exclude = ["/test", "/.github"]
 
 [dependencies]
 cxx = "1.0.69"
-rayon = { version = "1.5.3", optional = true }
 smallvec = "1.8.1"
 thiserror = "1.0.31"
 zstd-sys = "2.0.1"
+
+[dev-dependencies]
+tempfile = "3.3.0"
+rayon = "1.5.3"
 
 [build-dependencies]
 cxx-build = "1.0.69"
