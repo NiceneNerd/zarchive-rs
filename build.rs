@@ -10,6 +10,7 @@ fn main() {
         .file("include/sha_256.c")
         .include("include")
         .flag("-w")
+        .flag_if_supported("-std=c++17")
         .flag_if_supported("-std=c++20")
         .flag_if_supported("/std:c++20")
         .file("src/zarchivereader.cpp")
