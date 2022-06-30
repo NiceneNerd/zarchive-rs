@@ -1,5 +1,6 @@
 #include "zarchive/zarchivewriter.h"
 #include "zarchive/zarchivecommon.h"
+#include "rust/cxx.h"
 
 #include <string>
 #include <string_view>
@@ -343,4 +344,86 @@ void ZArchiveWriter::WriteFooter()
 	memcpy(m_footer.integrityHash, m_integritySha, 32);
 	_ZARCHIVE::Footer::Serialize(&m_footer, &tmp);
 	OutputData(&tmp, sizeof(_ZARCHIVE::Footer));
+}
+
+//------------------------------------------//
+// Wrapping pack functions adapted from CLI //
+// -----------------------------------------//
+
+struct PackContext
+{
+	std::filesystem::path outputFilePath;
+	std::ofstream currentOutputFile;
+	bool hasError{false};
+};
+
+void _pack_NewOutputFile(const int32_t partIndex, void* ctx)
+{
+	PackContext* packContext = (PackContext*)ctx;
+	packContext->currentOutputFile = std::ofstream(packContext->outputFilePath, std::ios::binary);
+	if (!packContext->currentOutputFile.is_open())
+	{
+		printf("Failed to create output file: %s\n", packContext->outputFilePath.string().c_str());
+		packContext->hasError = true;
+	}
+}
+
+void _pack_WriteOutputData(const void* data, size_t length, void* ctx)
+{
+	PackContext* packContext = (PackContext*)ctx;
+	packContext->currentOutputFile.write((const char*)data, length);
+}
+
+void Pack(rust::Str inputDirectory, rust::Str outputFile)
+{
+	const auto inputDirectory = std::filesystem::path(std::string_view(inputDirectory.data(), inputDirectory.size()));
+	const auto outputFile = std::filesystem::path(std::string_view(outputFile.data(), outputFile.size()));
+	std::vector<uint8_t> buffer;
+	buffer.resize(64 * 1024);
+
+	std::error_code ec;
+	PackContext packContext;
+	packContext.outputFilePath = outputFile;
+	ZArchiveWriter zWriter(_pack_NewOutputFile, _pack_WriteOutputData, &packContext);
+	if (packContext.hasError)
+		return -16;
+	for (auto const& dirEntry : fs::recursive_directory_iterator(inputDirectory))
+	{
+		fs::path pathEntry = fs::relative(dirEntry.path(), inputDirectory, ec);
+		if (dirEntry.is_directory())
+		{
+			if (!zWriter.MakeDir(pathEntry.generic_string().c_str(), false))
+			{
+				printf("Failed to create directory %s\n", pathEntry.string().c_str());
+				return -13;
+			}
+		}
+		else if (dirEntry.is_regular_file())
+		{
+			printf("Adding %s\n", pathEntry.string().c_str());
+			if (!zWriter.StartNewFile(pathEntry.generic_string().c_str()))
+			{
+				printf("Failed to create archive file %s\n", pathEntry.string().c_str());
+				return -14;
+			}
+			std::ifstream inputFile(inputDirectory / pathEntry, std::ios::binary);
+			if (!inputFile.is_open())
+			{
+				printf("Failed to open input file %s\n", pathEntry.string().c_str());
+				return -15;
+			}
+			while( true )
+			{
+				inputFile.read((char*)buffer.data(), buffer.size());
+				int32_t readBytes = (int32_t)inputFile.gcount();
+				if (readBytes <= 0)
+					break;
+				zWriter.AppendData(buffer.data(), readBytes);
+			}
+		}
+		if (packContext.hasError)
+			return -16;
+	}
+	zWriter.Finalize();
+	return 0;
 }

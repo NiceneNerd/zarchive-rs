@@ -1,4 +1,7 @@
 pub mod reader;
+pub mod writer;
+
+pub use reader::ZArchiveReader;
 use thiserror::Error;
 
 /// The error type for the `zarchive` crate.

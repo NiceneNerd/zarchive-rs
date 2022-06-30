@@ -273,29 +273,23 @@ impl ZArchiveReader {
             {
                 use rayon::prelude::*;
                 let archive = std::sync::Arc::new(std::sync::Mutex::new(self));
-                files
-                    .into_par_iter()
-                    .map(|file| {
-                        let dest = dest.join(&file);
-                        if !dest.parent().unwrap().exists() {
-                            std::fs::create_dir_all(dest.parent().unwrap())?;
-                        }
-                        archive.lock().unwrap().extract_file(&file, &dest)
-                    })
-                    .collect::<Result<()>>()
+                files.into_par_iter().try_for_each(|file| {
+                    let dest = dest.join(&file);
+                    if !dest.parent().unwrap().exists() {
+                        std::fs::create_dir_all(dest.parent().unwrap())?;
+                    }
+                    archive.lock().unwrap().extract_file(&file, &dest)
+                })
             }
             #[cfg(not(feature = "rayon"))]
             {
-                files
-                    .into_iter()
-                    .map(|file| {
-                        let dest = dest.join(&file);
-                        if !dest.parent().unwrap().exists() {
-                            std::fs::create_dir_all(dest.parent().unwrap())?;
-                        }
-                        self.extract_file(&file, &dest)
-                    })
-                    .collect::<Result<()>>()
+                files.into_iter().try_for_each(|file| {
+                    let dest = dest.join(&file);
+                    if !dest.parent().unwrap().exists() {
+                        std::fs::create_dir_all(dest.parent().unwrap())?;
+                    }
+                    self.extract_file(&file, &dest)
+                })
             }
         }
     }
