@@ -2,7 +2,7 @@
 name = "zarchive"
 description = "Simple Rust bindings to Exzap's ZArchive library"
 authors = ["Caleb Smith <c.smith@tuta.io>"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 readme = "README.md"
 license-file = "LICENSE.md"
