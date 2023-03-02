@@ -13,8 +13,8 @@
 //! ```
 use crate::{Result, ZArchiveError};
 use cxx::{type_id, ExternType};
-use smallvec::{smallvec, SmallVec};
 use std::{io::Write, path::Path, sync::RwLock};
+use tinyvec::{array_vec, ArrayVec};
 
 /// Wraps a handle to a file or directory node in an open archive.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
@@ -32,7 +32,7 @@ unsafe impl ExternType for ZArchiveNodeHandle {
 #[derive(Debug, Clone)]
 pub struct DirEntry<'a> {
     inner: ffi::DirEntry<'a>,
-    parent: SmallVec<[&'a str; 5]>,
+    parent: ArrayVec<[&'a str; 5]>,
 }
 
 impl<'a> DirEntry<'a> {
@@ -53,7 +53,7 @@ impl<'a> DirEntry<'a> {
 
     /// Returns the size of the entry, if it is a file.
     pub fn size(&self) -> Option<usize> {
-        self.inner.isFile.then(|| self.inner.size as usize)
+        self.inner.isFile.then_some(self.inner.size as usize)
     }
 
     /// Returns the full path to the entry.
@@ -93,7 +93,7 @@ pub struct ArchiveDirIterator<'a> {
     index: u32,
     count: u32,
     handle: ZArchiveNodeHandle,
-    parent: SmallVec<[&'a str; 5]>,
+    parent: ArrayVec<[&'a str; 5]>,
     reader: &'a ZArchiveReader,
     entry: ffi::DirEntry<'a>,
     started: bool,
@@ -102,7 +102,7 @@ pub struct ArchiveDirIterator<'a> {
 impl<'a> ArchiveDirIterator<'a> {
     fn new(
         handle: ZArchiveNodeHandle,
-        parent: SmallVec<[&'a str; 5]>,
+        parent: ArrayVec<[&'a str; 5]>,
         reader: &'a ZArchiveReader,
     ) -> ArchiveDirIterator<'a> {
         ArchiveDirIterator {
@@ -144,7 +144,7 @@ impl<'a> Iterator for ArchiveDirIterator<'a> {
             self.index += 1;
             Some(DirEntry {
                 inner: self.entry.clone(),
-                parent: self.parent.clone(),
+                parent: self.parent,
             })
         } else {
             None
@@ -247,7 +247,7 @@ impl ZArchiveReader {
             let mut reader = self.0.write().unwrap();
             let size = reader.pin_mut().GetFileSize(handle)?;
             let mut dest_handle = std::fs::File::create(dest)?;
-            dest_handle.set_len(size as u64)?;
+            dest_handle.set_len(size)?;
             let mut buffer = vec![0; size as usize];
             unsafe {
                 let written = reader
@@ -379,7 +379,7 @@ impl ZArchiveReader {
         if root == ZARCHIVE_INVALID_NODE {
             Err(ZArchiveError::MissingFile("archive root".to_owned()))
         } else {
-            Ok(ArchiveDirIterator::new(root, smallvec![], self))
+            Ok(ArchiveDirIterator::new(root, array_vec![], self))
         }
     }
 

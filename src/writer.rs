@@ -11,7 +11,7 @@ pub fn pack(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
         )));
     }
     if output.exists() {
-        std::fs::remove_file(&output)?;
+        std::fs::remove_file(output)?;
     } else if !output.parent().unwrap().exists() {
         std::fs::create_dir_all(output.parent().unwrap())?;
     }

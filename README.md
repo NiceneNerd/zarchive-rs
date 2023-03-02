@@ -1,7 +1,7 @@
 [![crates.io](https://img.shields.io/crates/v/zarchive)](https://crates.io/crates/zarchive)
 [![api](https://img.shields.io/badge/api-rustdoc-558b2f)](https://docs.rs/zarchive)
 [![license](https://img.shields.io/badge/license-GPL-blue)](https://spdx.org/licenses/GPL-3.0-or-later.html)
-[![build](https://img.shields.io/github/workflow/status/NiceneNerd/zarchive-rs/Build%20and%20test)](https://github.com/NiceneNerd/zarchive-rs/actions/workflows/push.yml)
+[![build](https://img.shields.io/github/actions/workflow/status/NiceneNerd/zarchive-rs/push.yml)](https://github.com/NiceneNerd/zarchive-rs/actions/workflows/push.yml)
 
 Simple Rust bindings to [ZArchive](https://github.com/Exzap/ZArchive).
 ## Overview

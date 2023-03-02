@@ -2,7 +2,7 @@
 name = "zarchive"
 description = "Simple Rust bindings to Exzap's ZArchive library"
 authors = ["Caleb Smith <c.smith@tuta.io>"]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 readme = "README.md"
 license-file = "LICENSE.md"
@@ -12,13 +12,13 @@ exclude = ["/test", "/.github"]
 
 [dependencies]
 cxx = "1.0.69"
-smallvec = "1.8.1"
-thiserror = "1.0.31"
-zstd-sys = "2.0.1"
+thiserror = "1"
+tinyvec = { version = "1.6", features = ["alloc"] }
+zstd-sys = "2.0"
 
 [dev-dependencies]
-tempfile = "3.3.0"
-rayon = "1.5.3"
+tempfile = "3.3"
+rayon = "1.6"
 
 [build-dependencies]
 cxx-build = "1.0.69"
